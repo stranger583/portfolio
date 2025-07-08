@@ -13,9 +13,11 @@ interface CryptoData {
 interface CryptoTickerListProps {
     cryptoData: CryptoData[]
     twdRate: number
+    onSymbolSelect?: (symbol: string) => void
+    selectedSymbol?: string
 }
 
-export function CryptoTickerList({ cryptoData, twdRate }: CryptoTickerListProps) {
+export function CryptoTickerList({ cryptoData, twdRate, onSymbolSelect, selectedSymbol }: CryptoTickerListProps) {
     return (
         <Card>
             <CardHeader>
@@ -39,6 +41,8 @@ export function CryptoTickerList({ cryptoData, twdRate }: CryptoTickerListProps)
                                 changePercent={crypto.changePercent}
                                 volume={crypto.volume}
                                 twdRate={twdRate}
+                                isSelected={selectedSymbol === crypto.symbol}
+                                onClick={() => onSymbolSelect?.(crypto.symbol)}
                             />
                         ))}
                     </TableBody>

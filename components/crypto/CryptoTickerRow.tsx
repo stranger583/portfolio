@@ -8,6 +8,8 @@ interface CryptoTickerRowProps {
     changePercent: number
     volume: number
     twdRate: number
+    isSelected?: boolean
+    onClick?: () => void
 }
 
 export function CryptoTickerRow({
@@ -15,12 +17,18 @@ export function CryptoTickerRow({
     price,
     changePercent,
     volume,
-    twdRate
+    twdRate,
+    isSelected = false,
+    onClick
 }: CryptoTickerRowProps) {
     const twdPrice = price * twdRate
 
     return (
-        <TableRow className="hover:bg-muted/50">
+        <TableRow
+            className={`hover:bg-muted/50 cursor-pointer transition-colors ${isSelected ? 'bg-muted/30 border-l-4 border-l-primary' : ''
+                }`}
+            onClick={onClick}
+        >
             <TableCell>
                 <div>
                     <div className="font-medium">{symbol}</div>

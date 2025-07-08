@@ -3,10 +3,12 @@
 import { useState } from 'react'
 import { CryptoSearch } from '@/components/crypto/CryptoSearch'
 import { CryptoTickerList } from '@/components/crypto/CryptoTickerList'
+import { TradingViewChart } from '@/components/crypto/TradingViewChart'
 import { useCryptoData } from '@/hooks/useCryptoData'
 
 function CryptoPanel() {
     const [searchTerm, setSearchTerm] = useState('')
+    const [selectedSymbol, setSelectedSymbol] = useState<string>('BTC')
     const { cryptoData, twdRate, loading, error } = useCryptoData(searchTerm)
 
     if (loading) {
@@ -35,10 +37,25 @@ function CryptoPanel() {
                 />
             </div>
 
-            <CryptoTickerList
-                cryptoData={cryptoData}
-                twdRate={twdRate}
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Left side - Ticker List */}
+                <div className="lg:col-span-1">
+                    <CryptoTickerList
+                        cryptoData={cryptoData}
+                        twdRate={twdRate}
+                        selectedSymbol={selectedSymbol}
+                        onSymbolSelect={setSelectedSymbol}
+                    />
+                </div>
+
+                {/* Right side - TradingView Chart */}
+                <div className="lg:col-span-2">
+                    <TradingViewChart
+                        symbol={selectedSymbol}
+                        twdRate={twdRate}
+                    />
+                </div>
+            </div>
         </div>
     )
 }
