@@ -23,6 +23,8 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null)
     const chartRef = useRef<IChartApi | null>(null)
     const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null)
+    const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null)
+    const maSeriesRef = useRef<ISeriesApi<"Line"> | null>(null)
     const wsRef = useRef<WebSocket | null>(null)
     const [currentPrice, setCurrentPrice] = useState<number>(0)
     const [timeframe, setTimeframe] = useState<string>('1m')
@@ -30,6 +32,58 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
     const [error, setError] = useState<string | null>(null)
     const [isChartReady, setIsChartReady] = useState(false)
     const [containerReady, setContainerReady] = useState(false)
+    const [high24h, setHigh24h] = useState<number>(0)
+    const [low24h, setLow24h] = useState<number>(0)
+    const [volume24h, setVolume24h] = useState<number>(0)
+
+    // Format large numbers with 億
+    const formatNumber = (num: number) => {
+        if (num >= 100000000) {
+            return (num / 100000000).toFixed(1) + '億'
+        } else if (num >= 10000) {
+            return (num / 10000).toFixed(1) + '萬'
+        }
+        return num.toFixed(2)
+    }
+
+    // Format price to keep as number
+    const formatPrice = (num: number) => {
+        return num.toFixed(2)
+    }
+
+    // Fetch 24h ticker data
+    const fetch24hData = async () => {
+        try {
+            const symbolPair = `${symbol}USDT`
+            const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbolPair}`)
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`)
+            }
+
+            const data = await response.json()
+            setHigh24h(parseFloat(data.highPrice))
+            setLow24h(parseFloat(data.lowPrice))
+            setVolume24h(parseFloat(data.quoteVolume))
+            console.log('24h data fetched:', { high: data.highPrice, low: data.lowPrice, volume: data.quoteVolume })
+        } catch (error) {
+            console.error('Error fetching 24h data:', error)
+        }
+    }
+
+    // Calculate moving average
+    const calculateMA = (data: KlineData[], period: number) => {
+        const maData = []
+        for (let i = period - 1; i < data.length; i++) {
+            const sum = data.slice(i - period + 1, i + 1).reduce((acc, item) => acc + item.close, 0)
+            const average = sum / period
+            maData.push({
+                time: data[i].time,
+                value: average
+            })
+        }
+        return maData
+    }
 
     // Fetch historical kline data
     const fetchHistoricalData = async (interval: string = '1m') => {
@@ -166,6 +220,18 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
                                 } else {
                                     console.log('❌ Candlestick series not available for closed candle update')
                                 }
+
+                                // Update volume
+                                if (volumeSeriesRef.current) {
+                                    const volumeData = {
+                                        time: candleData.time,
+                                        value: candleData.volume,
+                                        color: candleData.close >= candleData.open ? '#26a69a' : '#ef5350'
+                                    }
+                                    volumeSeriesRef.current.update(volumeData)
+                                    console.log('✅ Volume updated successfully')
+                                }
+
                                 setCurrentPrice(candleData.close)
                             } else { // Candle is still open - update the current candle
                                 console.log('📈 Updating chart with open candle:', candleData)
@@ -239,8 +305,37 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
         const historicalData = await fetchHistoricalData(newTimeframe)
         if (historicalData.length > 0 && candlestickSeriesRef.current) {
             candlestickSeriesRef.current.setData(historicalData)
+
+            // Update volume data
+            if (volumeSeriesRef.current) {
+                const volumeData = historicalData.map(item => ({
+                    time: item.time,
+                    value: item.volume,
+                    color: item.close >= item.open ? '#26a69a' : '#ef5350'
+                }))
+                volumeSeriesRef.current.setData(volumeData)
+            }
+
+            // Recalculate and update MA data
+            if (maSeriesRef.current) {
+                let maPeriod = 150 // Default for daily
+                if (newTimeframe === '1m') maPeriod = 150
+                else if (newTimeframe === '5m') maPeriod = 30
+                else if (newTimeframe === '15m') maPeriod = 10
+                else if (newTimeframe === '1h') maPeriod = 150
+                else if (newTimeframe === '4h') maPeriod = 150
+                else if (newTimeframe === '1d') maPeriod = 150
+
+                const maData = calculateMA(historicalData, Math.min(maPeriod, historicalData.length))
+                maSeriesRef.current.setData(maData)
+                console.log(`MA data updated with period ${maPeriod}, ${maData.length} points`)
+            }
+
             const lastCandle = historicalData[historicalData.length - 1]
             setCurrentPrice(lastCandle.close)
+
+            // Fetch 24h data
+            await fetch24hData()
 
             // Fit content to new data
             if (chartRef.current) {
@@ -318,12 +413,18 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
                     rightPriceScale: {
                         borderColor: '#ddd',
                         visible: true,
+                        scaleMargins: {
+                            top: 0.1,
+                            bottom: 0.3, // Give more space for volume chart
+                        },
                     },
                     timeScale: {
                         borderColor: '#ddd',
                         timeVisible: true,
                         secondsVisible: false,
                         visible: true,
+                        rightOffset: 12,
+                        barSpacing: 3,
                     },
                 })
 
@@ -341,6 +442,39 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
                 candlestickSeriesRef.current = candlestickSeries
                 console.log('Candlestick series added')
 
+                // Add volume series
+                const volumeSeries = chart.addHistogramSeries({
+                    color: '#26a69a',
+                    priceFormat: {
+                        type: 'volume',
+                        precision: 0,
+                        minMove: 1,
+                    },
+                    priceScaleId: 'volume', // Use separate price scale
+                })
+                volumeSeriesRef.current = volumeSeries
+                console.log('Volume series added')
+
+                // Configure volume price scale
+                chart.priceScale('volume').applyOptions({
+                    scaleMargins: {
+                        top: 0.7, // Position volume chart at bottom
+                        bottom: 0.05,
+                    },
+                    visible: true,
+                    borderColor: '#ddd',
+                    textColor: '#333',
+                })
+
+                // Add MA series
+                const maSeries = chart.addLineSeries({
+                    color: '#ff9800',
+                    lineWidth: 2,
+                    priceScaleId: 'right',
+                })
+                maSeriesRef.current = maSeries
+                console.log('MA series added')
+
                 // Load historical data
                 const historicalData = await fetchHistoricalData(timeframe)
                 if (historicalData.length > 0) {
@@ -349,7 +483,31 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
                     console.log('Last data point:', historicalData[historicalData.length - 1])
 
                     candlestickSeries.setData(historicalData)
-                    console.log('Data set to chart')
+
+                    // Set volume data
+                    const volumeData = historicalData.map(item => ({
+                        time: item.time,
+                        value: item.volume,
+                        color: item.close >= item.open ? '#26a69a' : '#ef5350'
+                    }))
+                    volumeSeries.setData(volumeData)
+                    console.log('Volume data set')
+
+                    // Calculate and set MA data for all timeframes
+                    let maPeriod = 150 // Default for daily
+                    if (timeframe === '1m') maPeriod = 150
+                    else if (timeframe === '5m') maPeriod = 30
+                    else if (timeframe === '15m') maPeriod = 10
+                    else if (timeframe === '1h') maPeriod = 150
+                    else if (timeframe === '4h') maPeriod = 150
+                    else if (timeframe === '1d') maPeriod = 150
+
+                    const maData = calculateMA(historicalData, Math.min(maPeriod, historicalData.length))
+                    maSeries.setData(maData)
+                    console.log(`MA data set with period ${maPeriod}, ${maData.length} points`)
+
+                    // Fetch 24h data
+                    await fetch24hData()
 
                     // Set current price
                     const lastCandle = historicalData[historicalData.length - 1]
@@ -448,13 +606,36 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
     return (
         <Card className="w-full">
             <CardHeader>
-                <div className="flex items-center justify-between">
-                    <CardTitle>{symbol}/USDT 圖表</CardTitle>
-                    <div className="flex items-center space-x-2">
-                        <div className="text-right">
-                            <div className="font-medium">${currentPrice.toFixed(4)}</div>
-                            <div className="text-sm text-muted-foreground">
-                                NT$ {(currentPrice * twdRate).toFixed(2)}
+                <div className="flex items-center justify-between mb-2">
+                    {/* Price display below chart */}
+                    <div className="flex items-center justify-between border-gray-200">
+                        <div className="text-left">
+                            <CardTitle className='lg:mb-2 text-sm lg:text-xl'>{symbol} / USDT</CardTitle>
+                            <div className="text-xl lg:text-xl font-bold">{formatPrice(currentPrice)}</div>
+                            <div className="text-xs lg:text-sm text-muted-foreground">
+                                NT$ {formatPrice(currentPrice * twdRate)}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex items-center space-x-2 lg:space-x-4">
+                        <div className="flex flex-col space-y-1 min-w-0">
+                            <div className="text-right">
+                                <div className="text-[10px] lg:text-sm text-muted-foreground">24h最高價</div>
+                                <div className="text-[10px] lg:text-sm truncate">{formatPrice(high24h)}</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-[10px] lg:text-sm text-muted-foreground">24h最低價</div>
+                                <div className="text-[10px] lg:text-sm truncate">{formatPrice(low24h)}</div>
+                            </div>
+                        </div>
+                        <div className="flex flex-col space-y-1 min-w-0">
+                            <div className="text-right">
+                                <div className="text-[10px] lg:text-sm text-muted-foreground">24h成交量({symbol})</div>
+                                <div className="text-[10px] lg:text-sm truncate">{formatNumber(volume24h)}</div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-[10px] lg:text-sm text-muted-foreground">24h成交量(USDT)</div>
+                                <div className="text-[10px] lg:text-sm truncate">{formatNumber(volume24h * currentPrice)}</div>
                             </div>
                         </div>
                     </div>
