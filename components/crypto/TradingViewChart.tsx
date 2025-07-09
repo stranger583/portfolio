@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createChart, IChartApi, ISeriesApi, Time } from 'lightweight-charts'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { SymbolSelector } from './SymbolSelector'
 
 interface TradingViewChartProps {
     symbol: string
     twdRate: number
+    onSymbolChange?: (symbol: string) => void
 }
 
 interface KlineData {
@@ -19,7 +21,7 @@ interface KlineData {
     volume: number
 }
 
-export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
+export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingViewChartProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null)
     const chartRef = useRef<IChartApi | null>(null)
     const candlestickSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null)
@@ -40,8 +42,6 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
     const formatNumber = (num: number) => {
         if (num >= 100000000) {
             return (num / 100000000).toFixed(1) + '億'
-        } else if (num >= 10000) {
-            return (num / 10000).toFixed(1) + '萬'
         }
         return num.toFixed(2)
     }
@@ -64,8 +64,8 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
             const data = await response.json()
             setHigh24h(parseFloat(data.highPrice))
             setLow24h(parseFloat(data.lowPrice))
-            setVolume24h(parseFloat(data.quoteVolume))
-            console.log('24h data fetched:', { high: data.highPrice, low: data.lowPrice, volume: data.quoteVolume })
+            setVolume24h(parseFloat(data.volume))
+            console.log('24h data fetched:', { high: data.highPrice, low: data.lowPrice, volume: data.volume })
         } catch (error) {
             console.error('Error fetching 24h data:', error)
         }
@@ -583,6 +583,23 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
         console.log('Symbol changed to:', symbol)
     }, [symbol])
 
+    // Effect to periodically refresh 24h data
+    useEffect(() => {
+        if (!symbol) return
+
+        // Initial fetch
+        fetch24hData()
+
+        // Set up interval to refresh every 30 seconds
+        const interval = setInterval(() => {
+            fetch24hData()
+        }, 30000)
+
+        return () => {
+            clearInterval(interval)
+        }
+    }, [symbol])
+
     useEffect(() => {
         return () => {
             if (wsRef.current) {
@@ -610,7 +627,14 @@ export function TradingViewChart({ symbol, twdRate }: TradingViewChartProps) {
                     {/* Price display below chart */}
                     <div className="flex items-center justify-between border-gray-200">
                         <div className="text-left">
-                            <CardTitle className='lg:mb-2 text-sm lg:text-xl'>{symbol} / USDT</CardTitle>
+                            {onSymbolChange ? (
+                                <SymbolSelector
+                                    symbol={symbol}
+                                    onSymbolChange={onSymbolChange}
+                                />
+                            ) : (
+                                <div className='lg:mb-2 text-sm lg:text-xl font-semibold'>{symbol} / USDT</div>
+                            )}
                             <div className="text-xl lg:text-xl font-bold">{formatPrice(currentPrice)}</div>
                             <div className="text-xs lg:text-sm text-muted-foreground">
                                 NT$ {formatPrice(currentPrice * twdRate)}

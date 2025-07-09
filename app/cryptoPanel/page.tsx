@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { CryptoSearch } from '@/components/crypto/CryptoSearch'
 import { CryptoTickerList } from '@/components/crypto/CryptoTickerList'
 import { TradingViewChart } from '@/components/crypto/TradingViewChart'
+import { OrderBookChart } from '@/components/crypto/OrderBookChart'
 import { useCryptoData } from '@/hooks/useCryptoData'
 
 function CryptoPanel() {
@@ -53,8 +54,14 @@ function CryptoPanel() {
                     <TradingViewChart
                         symbol={selectedSymbol}
                         twdRate={twdRate}
+                        onSymbolChange={setSelectedSymbol}
                     />
                 </div>
+            </div>
+
+            {/* Order Book Chart */}
+            <div className="mt-6">
+                <OrderBookChart symbol={selectedSymbol} />
             </div>
         </div>
     )
