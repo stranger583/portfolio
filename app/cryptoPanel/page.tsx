@@ -29,7 +29,7 @@ function CryptoPanel() {
     }
 
     return (
-        <div className="container mx-auto p-6 space-y-6">
+        <div className="container mx-auto p-4 sm:p-6 space-y-6">
             <div className="flex flex-col space-y-4">
                 <h1 className="text-3xl font-bold">虛擬貨幣行情</h1>
                 <CryptoSearch

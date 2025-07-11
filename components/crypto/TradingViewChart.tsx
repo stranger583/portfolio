@@ -36,7 +36,6 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
     const [high24h, setHigh24h] = useState<number>(0)
     const [low24h, setLow24h] = useState<number>(0)
     const [volume24h, setVolume24h] = useState<number>(0)
-    const [isLoadingMore, setIsLoadingMore] = useState(false)
     const isLoadingMoreRef = useRef(false)
     const hasMoreDataRef = useRef(true) // 追蹤是否還有更多數據可載入
 
@@ -321,7 +320,6 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
         }
 
         console.log('🔄 Loading more historical data...')
-        setIsLoadingMore(true)
         isLoadingMoreRef.current = true
 
         try {
@@ -331,7 +329,6 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
 
             if (currentData.length === 0) {
                 console.log('No current data available')
-                setIsLoadingMore(false)
                 isLoadingMoreRef.current = false
                 return
             }
@@ -379,7 +376,6 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
             if (olderData.length === 0) {
                 console.log('No more historical data available')
                 hasMoreDataRef.current = false
-                setIsLoadingMore(false)
                 isLoadingMoreRef.current = false
                 return
             }
@@ -449,7 +445,6 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
         } catch (error) {
             console.error('❌ Error loading more historical data:', error)
         } finally {
-            setIsLoadingMore(false)
             setTimeout(() => {
                 isLoadingMoreRef.current = false
             }, 1000)
@@ -736,15 +731,6 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
                             {tf.label}
                         </Badge>
                     ))}
-                    <Badge
-                        variant="outline"
-                        className={`cursor-pointer ml-auto ${isLoadingMore ? 'opacity-50 cursor-not-allowed' :
-                            !hasMoreDataRef.current ? 'opacity-50 cursor-not-allowed' : ''
-                            }`}
-                        onClick={(!isLoadingMore && hasMoreDataRef.current) ? loadMoreHistoricalData : undefined}
-                    >
-                        {isLoadingMore ? '載入中...' : !hasMoreDataRef.current ? '無更多數據' : '載入更多'}
-                    </Badge>
                 </div>
             </CardHeader>
 

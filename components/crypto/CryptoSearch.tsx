@@ -10,7 +10,7 @@ export function CryptoSearch({ searchTerm, onSearchChange }: CryptoSearchProps) 
         <div className="w-full max-w-md">
             <Input
                 type="text"
-                placeholder="搜尋虛擬貨幣..."
+                placeholder="搜尋熱門虛擬貨幣..."
                 value={searchTerm}
                 onChange={(e) => onSearchChange(e.target.value)}
                 className="w-full"

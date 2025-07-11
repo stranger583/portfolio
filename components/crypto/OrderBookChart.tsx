@@ -18,30 +18,96 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
     const [buyRatio, setBuyRatio] = useState<number>(0)
     const [sellRatio, setSellRatio] = useState<number>(0)
     const [isLoading, setIsLoading] = useState(true)
+    const [lastUpdateTime, setLastUpdateTime] = useState<Date>(new Date())
     const wsRef = useRef<WebSocket | null>(null)
-    const updateTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const currentOrderBookRef = useRef<{ bids: OrderBookData[], asks: OrderBookData[] }>({ bids: [], asks: [] })
+    const lastValidDataRef = useRef<{ bids: OrderBookData[], asks: OrderBookData[] }>({ bids: [], asks: [] })
+    const connectionRetryCount = useRef(0)
+    const maxRetries = 5
 
-    // Debounced update function to prevent rapid changes
-    const debouncedUpdate = (buyOrders: OrderBookData[], sellOrders: OrderBookData[]) => {
-        if (updateTimeoutRef.current) {
-            clearTimeout(updateTimeoutRef.current)
+    // 即時更新函數 - 移除 debounce 延遲
+    const updateOrderBook = (buyOrders: OrderBookData[], sellOrders: OrderBookData[]) => {
+        // 合併現有數據和新的更新數據
+        const currentBids = currentOrderBookRef.current.bids
+        const currentAsks = currentOrderBookRef.current.asks
+
+        // 創建價格映射以便快速查找和更新
+        const bidMap = new Map<number, OrderBookData>()
+        const askMap = new Map<number, OrderBookData>()
+
+        // 先添加現有數據
+        currentBids.forEach(bid => bidMap.set(bid.price, bid))
+        currentAsks.forEach(ask => askMap.set(ask.price, ask))
+
+        // 更新或添加新的買單數據
+        buyOrders.forEach(bid => {
+            if (bid.quantity > 0) {
+                bidMap.set(bid.price, bid)
+            } else {
+                bidMap.delete(bid.price) // 數量為0表示刪除該價格層級
+            }
+        })
+
+        // 更新或添加新的賣單數據
+        sellOrders.forEach(ask => {
+            if (ask.quantity > 0) {
+                askMap.set(ask.price, ask)
+            } else {
+                askMap.delete(ask.price) // 數量為0表示刪除該價格層級
+            }
+        })
+
+        // 轉換回數組並排序
+        const updatedBids = Array.from(bidMap.values())
+            .sort((a, b) => b.price - a.price) // 買單按價格降序排列
+            .slice(0, 20) // 只保留前20個
+
+        const updatedAsks = Array.from(askMap.values())
+            .sort((a, b) => a.price - b.price) // 賣單按價格升序排列
+            .slice(0, 20) // 只保留前20個
+
+        // 數據驗證：確保買賣價格不重疊
+        const highestBid = updatedBids[0]?.price || 0
+        const lowestAsk = updatedAsks[0]?.price || 0
+
+        if (highestBid > 0 && lowestAsk > 0 && highestBid >= lowestAsk) {
+            // 過濾掉無效的價格層級
+            const validBids = updatedBids.filter(bid => bid.price < lowestAsk)
+            const validAsks = updatedAsks.filter(ask => ask.price > highestBid)
+
+            if (validBids.length > 0 && validAsks.length > 0) {
+                currentOrderBookRef.current = { bids: validBids, asks: validAsks }
+            } else {
+                // 使用最後的有效數據作為備用
+                if (lastValidDataRef.current.bids.length > 0 || lastValidDataRef.current.asks.length > 0) {
+                    currentOrderBookRef.current = { ...lastValidDataRef.current }
+                } else {
+                    return
+                }
+            }
+        } else {
+            // 更新 ref
+            currentOrderBookRef.current = { bids: updatedBids, asks: updatedAsks }
         }
 
-        updateTimeoutRef.current = setTimeout(() => {
-            // Calculate new ratios
-            const totalBuyVolume = buyOrders.reduce((sum, order) => sum + order.quantity, 0)
-            const totalSellVolume = sellOrders.reduce((sum, order) => sum + order.quantity, 0)
-            const totalVolume = totalBuyVolume + totalSellVolume
+        // 保存有效數據作為備用
+        if (currentOrderBookRef.current.bids.length > 0 || currentOrderBookRef.current.asks.length > 0) {
+            lastValidDataRef.current = { ...currentOrderBookRef.current }
+        }
 
-            const buyRatioValue = totalVolume > 0 ? (totalBuyVolume / totalVolume) * 100 : 0
-            const sellRatioValue = totalVolume > 0 ? (totalSellVolume / totalVolume) * 100 : 0
+        // 計算新的比例
+        const totalBuyVolume = currentOrderBookRef.current.bids.reduce((sum, order) => sum + order.quantity, 0)
+        const totalSellVolume = currentOrderBookRef.current.asks.reduce((sum, order) => sum + order.quantity, 0)
+        const totalVolume = totalBuyVolume + totalSellVolume
 
-            console.log('Debounced update - Buy:', buyRatioValue.toFixed(2) + '%', 'Sell:', sellRatioValue.toFixed(2) + '%')
+        const buyRatioValue = totalVolume > 0 ? (totalBuyVolume / totalVolume) * 100 : 0
+        const sellRatioValue = totalVolume > 0 ? (totalSellVolume / totalVolume) * 100 : 0
 
-            setBuyRatio(buyRatioValue)
-            setSellRatio(sellRatioValue)
-            setOrderBookData([...buyOrders, ...sellOrders])
-        }, 100) // 100ms debounce
+        // 立即更新狀態
+        setBuyRatio(buyRatioValue)
+        setSellRatio(sellRatioValue)
+        setOrderBookData([...currentOrderBookRef.current.bids, ...currentOrderBookRef.current.asks])
+        setLastUpdateTime(new Date())
     }
 
     // Fetch order book data
@@ -85,21 +151,14 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
                     order.price > 1 // Filter out very low prices
                 )
 
-            // Calculate total volumes
-            const totalBuyVolume = buyOrders.reduce((sum, order) => sum + order.quantity, 0)
-            const totalSellVolume = sellOrders.reduce((sum, order) => sum + order.quantity, 0)
-            const totalVolume = totalBuyVolume + totalSellVolume
+            // 初始化 currentOrderBookRef
+            currentOrderBookRef.current = { bids: buyOrders, asks: sellOrders }
 
-            // Calculate ratios
-            const buyRatioValue = totalVolume > 0 ? (totalBuyVolume / totalVolume) * 100 : 0
-            const sellRatioValue = totalVolume > 0 ? (totalSellVolume / totalVolume) * 100 : 0
-
-            setBuyRatio(buyRatioValue)
-            setSellRatio(sellRatioValue)
-            setOrderBookData([...buyOrders, ...sellOrders])
+            // 使用新的更新函數
+            updateOrderBook(buyOrders, sellOrders)
             setIsLoading(false)
 
-            console.log('Order book data fetched:', { buyRatio: buyRatioValue, sellRatio: sellRatioValue })
+            console.log('Order book data fetched and initialized')
         } catch (error) {
             console.error('Error fetching order book:', error)
             setIsLoading(false)
@@ -112,21 +171,26 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
             wsRef.current.close()
         }
 
-        // Try different stream formats
-        const streamName1 = `${symbol.toLowerCase()}usdt@depth20`
-        const streamName2 = `${symbol.toLowerCase()}usdt@miniTicker`
-        const wsUrl = `wss://stream.binance.com:9443/ws/${streamName1}`
+        // 嘗試多種流格式
+        const streamFormats = [
+            `${symbol.toLowerCase()}usdt@depth20@100ms`,
+            `${symbol.toLowerCase()}usdt@depth@100ms`,
+            `${symbol.toLowerCase()}usdt@depth20`
+        ]
 
-        console.log('Connecting to order book WebSocket:', wsUrl)
-        console.log('Stream name:', streamName1)
-        console.log('Alternative stream name:', streamName2)
+        const streamName = streamFormats[0] // 優先使用100ms更新頻率
+        const wsUrl = `wss://stream.binance.com:9443/ws/${streamName}`
+
+        console.log('🔌 Attempting WebSocket connection with format:', streamName)
+        console.log('🔌 WebSocket URL:', wsUrl)
+        console.log('🔌 Alternative formats:', streamFormats.slice(1))
 
         const ws = new WebSocket(wsUrl)
 
         // Add connection timeout
         const connectionTimeout = setTimeout(() => {
             if (ws.readyState === WebSocket.CONNECTING) {
-                console.log('WebSocket connection timeout, closing...')
+                console.log('⏰ WebSocket connection timeout, closing...')
                 ws.close()
             }
         }, 10000)
@@ -134,20 +198,16 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
         ws.onopen = () => {
             clearTimeout(connectionTimeout)
             console.log('✅ Order book WebSocket connected successfully')
-            console.log('WebSocket readyState:', ws.readyState)
+            console.log('✅ WebSocket readyState:', ws.readyState)
+            console.log('✅ Using stream format:', streamName)
         }
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data)
-                console.log('📨 Order book WebSocket message received:', data)
 
                 if (data.e === 'depthUpdate') {
-                    console.log('📊 Depth update detected')
-                    console.log('Bids:', data.b)
-                    console.log('Asks:', data.a)
-
-                    // Update order book with real-time data and validation
+                    // 簡化處理：直接處理所有深度更新
                     const updatedBuyOrders: OrderBookData[] = data.b
                         .map((bid: [string, string]) => ({
                             price: parseFloat(bid[0]),
@@ -155,11 +215,11 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
                             side: 'buy'
                         }))
                         .filter((order: OrderBookData) =>
-                            order.quantity > 0 &&
+                            order.quantity >= 0 && // 允許數量為0（表示刪除）
                             order.price > 0 &&
                             !isNaN(order.price) &&
                             !isNaN(order.quantity) &&
-                            order.price > 1 // Filter out very low prices
+                            order.price > 1
                         )
 
                     const updatedSellOrders: OrderBookData[] = data.a
@@ -169,40 +229,27 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
                             side: 'sell'
                         }))
                         .filter((order: OrderBookData) =>
-                            order.quantity > 0 &&
+                            order.quantity >= 0 && // 允許數量為0（表示刪除）
                             order.price > 0 &&
                             !isNaN(order.price) &&
                             !isNaN(order.quantity) &&
-                            order.price > 1 // Filter out very low prices
+                            order.price > 1
                         )
 
-                    console.log('Updated buy orders:', updatedBuyOrders.length)
-                    console.log('Updated sell orders:', updatedSellOrders.length)
-
-                    // Only update if we have valid data
+                    // 檢查是否有數據並立即更新
                     if (updatedBuyOrders.length > 0 || updatedSellOrders.length > 0) {
-                        // Use debounced update to prevent flashing
-                        debouncedUpdate(updatedBuyOrders, updatedSellOrders)
-                    } else {
-                        console.log('⚠️ No valid order book data received, skipping update')
+                        updateOrderBook(updatedBuyOrders, updatedSellOrders)
                     }
-                } else if (data.e === '24hrTicker') {
-                    console.log('📊 24hr ticker update - refreshing order book data')
-                    // Fallback to REST API if WebSocket depth doesn't work
-                    fetchOrderBook()
-                } else {
-                    console.log('📨 Other message type:', data.e)
                 }
             } catch (error) {
                 console.error('❌ Error parsing WebSocket data:', error)
-                console.error('Raw data:', event.data)
             }
         }
 
         ws.onerror = (error) => {
             clearTimeout(connectionTimeout)
             console.error('❌ Order book WebSocket error:', error)
-            console.log('WebSocket readyState:', ws.readyState)
+            console.error('❌ WebSocket readyState:', ws.readyState)
             // Fallback to REST API
             console.log('🔄 Falling back to REST API for order book data')
             fetchOrderBook()
@@ -211,23 +258,33 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
         ws.onclose = (event) => {
             clearTimeout(connectionTimeout)
             console.log('🔌 Order book WebSocket disconnected')
-            console.log('Close event code:', event.code, 'reason:', event.reason)
+            console.log('🔌 Close event code:', event.code, 'reason:', event.reason)
 
             // Only reconnect for normal closures or network issues
             if (event.code === 1000 || event.code === 1001 || event.code === 1006) {
-                console.log('🔄 Attempting to reconnect order book WebSocket...')
-                setTimeout(() => {
-                    setupWebSocket()
-                }, 3000)
+                if (connectionRetryCount.current < maxRetries) {
+                    connectionRetryCount.current++
+                    console.log(`🔄 Attempting to reconnect order book WebSocket... (${connectionRetryCount.current}/${maxRetries})`)
+                    setTimeout(() => {
+                        setupWebSocket()
+                    }, 3000)
+                } else {
+                    console.log('❌ Max retry attempts reached, falling back to REST API')
+                    connectionRetryCount.current = 0
+                    // Fallback to REST API with interval
+                    const interval = setInterval(() => {
+                        fetchOrderBook()
+                    }, 2000) // 減少到2秒
+                    return () => clearInterval(interval)
+                }
             } else {
-                console.log('WebSocket closed with code:', event.code, '- not reconnecting')
+                console.log('🔌 WebSocket closed with code:', event.code, '- not reconnecting')
+                connectionRetryCount.current = 0
                 // Fallback to REST API with interval
-                console.log('🔄 Setting up REST API fallback with 5-second interval')
+                console.log('🔄 Setting up REST API fallback with 2-second interval')
                 const interval = setInterval(() => {
                     fetchOrderBook()
-                }, 5000)
-
-                // Clear interval when component unmounts
+                }, 2000) // 減少到2秒
                 return () => clearInterval(interval)
             }
         }
@@ -240,23 +297,28 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
         if (!symbol) return
 
         console.log('🔄 Setting up order book for symbol:', symbol)
+
+        // 先獲取初始數據
         fetchOrderBook()
+
+        // 立即建立WebSocket連接，不延遲
         setupWebSocket()
 
-        // Fallback: also refresh via REST API every 10 seconds
-        const restInterval = setInterval(() => {
-            console.log('🔄 Periodic REST API refresh for order book')
-            fetchOrderBook()
-        }, 10000)
+        // 添加定期檢查，確保數據更新
+        const checkInterval = setInterval(() => {
+            // 如果超過10秒沒有更新，重新獲取數據（減少到10秒）
+            const timeSinceLastUpdate = Date.now() - lastUpdateTime.getTime()
+            if (timeSinceLastUpdate > 10000) {
+                console.log('⚠️ No updates for 10 seconds, refreshing data')
+                fetchOrderBook()
+            }
+        }, 2000) // 減少檢查間隔到2秒
 
         return () => {
             console.log('🧹 Cleaning up order book WebSocket and intervals')
+            clearInterval(checkInterval)
             if (wsRef.current) {
                 wsRef.current.close()
-            }
-            clearInterval(restInterval)
-            if (updateTimeoutRef.current) {
-                clearTimeout(updateTimeoutRef.current)
             }
         }
     }, [symbol])
@@ -273,6 +335,9 @@ export function OrderBookChart({ symbol }: OrderBookChartProps) {
         <Card className="w-full">
             <CardHeader>
                 <CardTitle className="text-sm lg:text-lg">{symbol}/USDT 委託訂單</CardTitle>
+                <div className="text-xs text-muted-foreground">
+                    最後更新: {lastUpdateTime.toLocaleTimeString()}
+                </div>
             </CardHeader>
             <CardContent className="space-y-6">
                 {/* Buy/Sell Ratio Display */}
