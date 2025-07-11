@@ -30,6 +30,7 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
     const wsRef = useRef<WebSocket | null>(null)
     const [currentPrice, setCurrentPrice] = useState<number>(0)
     const [timeframe, setTimeframe] = useState<string>('1m')
+    const timeframeRef = useRef<string>('1m') // 新增：用ref追蹤當前timeframe
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [high24h, setHigh24h] = useState<number>(0)
@@ -147,6 +148,7 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
         console.log('=== setupWebSocketDirect called ===')
         console.log('symbol:', symbol)
         console.log('timeframe:', timeframe)
+        console.log('timeframeRef.current:', timeframeRef.current)
         console.log('candlestickSeriesRef.current:', !!candlestickSeriesRef.current)
 
         if (!candlestickSeriesRef.current) {
@@ -159,7 +161,9 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
             wsRef.current.close()
         }
 
-        const streamName = `${symbol.toLowerCase()}usdt@kline_${timeframe}`
+        // 使用 ref 中的當前 timeframe
+        const currentTimeframe = timeframeRef.current
+        const streamName = `${symbol.toLowerCase()}usdt@kline_${currentTimeframe}`
         const wsUrl = `wss://stream.binance.com:9443/ws/${streamName}`
         console.log('Connecting to WebSocket URL:', wsUrl)
 
@@ -244,6 +248,7 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
     const changeTimeframe = async (newTimeframe: string) => {
         console.log('Changing timeframe to:', newTimeframe)
         setTimeframe(newTimeframe)
+        timeframeRef.current = newTimeframe // 更新ref
         setIsLoading(true)
         setError(null)
         hasMoreDataRef.current = true // 重置有更多數據的標誌
@@ -254,6 +259,14 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
 
         if (candlestickSeriesRef.current) {
             candlestickSeriesRef.current.setData([])
+        }
+
+        if (volumeSeriesRef.current) {
+            volumeSeriesRef.current.setData([])
+        }
+
+        if (maSeriesRef.current) {
+            maSeriesRef.current.setData([])
         }
 
         const historicalData = await fetchHistoricalData(newTimeframe)
@@ -327,9 +340,13 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
             const oldestTimestamp = Math.min(...currentData.map(item => item.time as number))
             console.log('Oldest timestamp in current data:', new Date(oldestTimestamp * 1000))
 
+            // 使用 ref 中的當前 timeframe，避免異步問題
+            const currentTimeframe = timeframeRef.current
+            console.log('Using timeframe from ref:', currentTimeframe)
+
             // 根據 timeframe 計算正確的時間間隔
             let timeInterval: number
-            switch (timeframe) {
+            switch (currentTimeframe) {
                 case '1m':
                     timeInterval = 60 // 1分鐘 = 60秒
                     break
@@ -354,10 +371,10 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
 
             // 計算 endTime (最舊時間戳的前一個時間間隔)
             const endTime = (oldestTimestamp - timeInterval) * 1000 // 轉換為毫秒並減去對應的時間間隔
-            console.log(`Calculated endTime for ${timeframe}:`, new Date(endTime))
+            console.log(`Calculated endTime for ${currentTimeframe}:`, new Date(endTime))
 
             // 獲取更舊的數據
-            const olderData = await fetchHistoricalData(timeframe, 500, endTime)
+            const olderData = await fetchHistoricalData(currentTimeframe, 500, endTime)
 
             if (olderData.length === 0) {
                 console.log('No more historical data available')
@@ -385,25 +402,40 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
                 // 更新蠟燭圖數據
                 candlestickSeriesRef.current.setData(sortedData)
 
-                // 更新成交量數據
+                // 更新成交量數據 - 保留現有數據，只添加新的數據點
                 if (volumeSeriesRef.current) {
-                    const volumeData = sortedData.map(item => ({
+                    // 獲取現有的成交量數據
+                    const existingVolumeData = volumeSeriesRef.current.data() as Array<{ time: Time, value: number, color: string }>
+
+                    // 為新的數據點創建成交量數據
+                    const newVolumeData = uniqueOlderData.map(item => ({
                         time: item.time,
                         value: item.volume,
                         color: item.close >= item.open ? '#26a69a' : '#ef5350'
                     }))
-                    volumeSeriesRef.current.setData(volumeData)
+
+                    // 合併現有和新的成交量數據，避免重複
+                    const mergedVolumeData = [...newVolumeData, ...existingVolumeData]
+                    const uniqueVolumeData = mergedVolumeData.filter((item, index, self) =>
+                        index === self.findIndex(t => t.time === item.time)
+                    )
+
+                    // 按時間排序
+                    const sortedVolumeData = uniqueVolumeData.sort((a, b) => (a.time as number) - (b.time as number))
+
+                    // 更新成交量圖表
+                    volumeSeriesRef.current.setData(sortedVolumeData)
                 }
 
                 // 更新移動平均線
                 if (maSeriesRef.current) {
                     let maPeriod = 150
-                    if (timeframe === '1m') maPeriod = 150
-                    else if (timeframe === '5m') maPeriod = 30
-                    else if (timeframe === '15m') maPeriod = 10
-                    else if (timeframe === '1h') maPeriod = 150
-                    else if (timeframe === '4h') maPeriod = 150
-                    else if (timeframe === '1d') maPeriod = 150
+                    if (currentTimeframe === '1m') maPeriod = 150
+                    else if (currentTimeframe === '5m') maPeriod = 30
+                    else if (currentTimeframe === '15m') maPeriod = 10
+                    else if (currentTimeframe === '1h') maPeriod = 150
+                    else if (currentTimeframe === '4h') maPeriod = 150
+                    else if (currentTimeframe === '1d') maPeriod = 150
 
                     const maData = calculateMA(sortedData, Math.min(maPeriod, sortedData.length))
                     maSeriesRef.current.setData(maData)
@@ -557,6 +589,9 @@ export function TradingViewChart({ symbol, twdRate, onSymbolChange }: TradingVie
                     setCurrentPrice(lastCandle.close)
                     setIsLoading(false)
                     setError(null)
+
+                    // 確保 timeframeRef 與當前 timeframe 同步
+                    timeframeRef.current = timeframe
 
                     setTimeout(() => {
                         setupWebSocketDirect()
